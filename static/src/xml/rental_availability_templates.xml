@@ -63,7 +63,7 @@
                                     </span>
                                 </th>
                                 <t t-foreach="columns" t-as="col" t-key="col.key">
-                                    <th class="text-center bg-100 text-nowrap border-bottom" style="min-width: 65px; border-left: 1px solid #adb5bd !important;" t-att-title="col.start + ' - ' + col.end">
+                                    <th class="text-center text-nowrap" style="min-width: 65px;" t-att-title="col.start + ' - ' + col.end">
                                         <t t-esc="col.label"/>
                                     </th>
                                 </t>
@@ -80,9 +80,9 @@
                                     <t t-foreach="row.cells" t-as="cell" t-key="cell.column_key">
                                         <t t-set="colData" t-value="columns.find(c => c.key === cell.column_key)"/>
                                         <td
-                                            t-att-title="cell.booked > 0 ? (cell.tooltip || '') + ' - Click to view bookings' : (cell.tooltip || '')"
+                                            t-att-title="cell.booked > 0 ? (cell.booked === 1 ? '1 booking' : cell.booked + ' bookings') + ' - Click to view' : 'No bookings'"
                                             t-att-class="'text-center align-middle border-bottom o_tlrm_cell' + (cell.booked > 0 ? ' o_tlrm_cell_clickable' : '')"
-                                            t-att-style="'border-left: 1px solid #adb5bd !important; background-color: ' + this.getCellColor(cell, row.base_capacity) + ';'"
+                                            t-att-style="'background-color: ' + this.getCellColor(cell, row.base_capacity) + ';'"
                                             t-on-click="() => cell.booked > 0 &amp;&amp; this.openBookingsForCell(row.product_id, cell.column_key, colData?.start, colData?.end)"
                                         >
                                             <t t-esc="cell.available"/>
