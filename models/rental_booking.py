@@ -7,9 +7,9 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 
-class StockRentalBooking(models.Model):
-    _name = 'stock.rental.booking'
-    _description = 'Stock Rental Booking'
+class TlRentalBooking(models.Model):
+    _name = 'tl.rental.booking'
+    _description = 'TL Rental Booking'
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'date_start desc, id desc'
 
@@ -69,7 +69,7 @@ class StockRentalBooking(models.Model):
         ('cancelled', 'Cancelled'),
     ], string="Status", default='draft', tracking=True, group_expand='_expand_states')
     
-    line_ids = fields.One2many('stock.rental.booking.line', 'booking_id', string="Lines")
+    line_ids = fields.One2many('tl.rental.booking.line', 'booking_id', string="Lines")
     
     notes = fields.Text(string="Notes")
 
@@ -77,7 +77,7 @@ class StockRentalBooking(models.Model):
     def create(self, vals_list):
         for vals in vals_list:
             if vals.get('name', _('New')) == _('New'):
-                vals['name'] = self.env['ir.sequence'].next_by_code('stock.rental.booking') or _('New')
+                vals['name'] = self.env['ir.sequence'].next_by_code('tl.rental.booking') or _('New')
         return super().create(vals_list)
 
     def action_confirm(self):
@@ -173,8 +173,8 @@ class StockRentalBooking(models.Model):
                     'location_dest_id': rental_location.id,
                     'company_id': booking.company_id.id,
                     'origin': booking.name,
-                    'rental_booking_id': booking.id,
-                    'rental_direction': 'out',
+                    'tlrm_booking_id': booking.id,
+                    'tlrm_direction': 'out',
                 }
                 picking = Picking.create(picking_vals)
                 for line in lines:
@@ -219,8 +219,8 @@ class StockRentalBooking(models.Model):
                     'location_dest_id': source_location.id,
                     'company_id': booking.company_id.id,
                     'origin': booking.name,
-                    'rental_booking_id': booking.id,
-                    'rental_direction': 'in',
+                    'tlrm_booking_id': booking.id,
+                    'tlrm_direction': 'in',
                 }
                 picking = Picking.create(picking_vals)
                 for line in lines:
@@ -237,12 +237,13 @@ class StockRentalBooking(models.Model):
                 picking.action_assign()
 
 
-class StockRentalBookingLine(models.Model):
-    _name = 'stock.rental.booking.line'
-    _description = 'Stock Rental Booking Line'
+class TlRentalBookingLine(models.Model):
+    _name = 'tl.rental.booking.line'
+    _description = 'TL Rental Booking Line'
 
-    booking_id = fields.Many2one('stock.rental.booking', string="Booking", required=True, ondelete="cascade")
+    booking_id = fields.Many2one('tl.rental.booking', string="Booking", required=True, ondelete="cascade")
     company_id = fields.Many2one(related='booking_id.company_id', store=True)
+    project_id = fields.Many2one(related='booking_id.project_id', store=True, string="Project")
     source_warehouse_id = fields.Many2one('stock.warehouse', string="Source Warehouse", check_company=True)
     rental_warehouse_id = fields.Many2one('stock.warehouse', string="Rental Warehouse", check_company=True)
     source_location_id = fields.Many2one('stock.location', string="Source Location", compute="_compute_locations", store=False)

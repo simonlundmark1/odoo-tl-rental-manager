@@ -1,0 +1,21 @@
+/* Rental Availability Grid Styles */
+
+.o_tlrm_availability_table .o_tlrm_cell_clickable {
+    cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+    transition: box-shadow 0.1s ease-out;
+}
+
+.o_tlrm_availability_table .o_tlrm_cell_clickable:hover {
+    filter: brightness(0.85);
+    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.4);
+}
+
+/* Darker horizontal row borders */
+.o_tlrm_availability_table tbody tr {
+    border-bottom: 1px solid #adb5bd !important;
+}
+
+.o_tlrm_availability_table tbody td {
+    border-bottom: 1px solid #adb5bd !important;
+}

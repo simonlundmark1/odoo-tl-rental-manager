@@ -2,14 +2,14 @@ from odoo import http
 from odoo.http import request
 
 
-class StockRentalAvailabilityController(http.Controller):
+class TlrmAvailabilityController(http.Controller):
 
     @http.route(
-        '/stock_rental/availability_grid/global',
+        '/tlrm/availability_grid/global',
         type='json',
         auth='user'
     )
-    def stock_rental_availability_global(
+    def tlrm_availability_global(
         self,
         company_id=None,
         warehouse_id=None,
@@ -29,7 +29,7 @@ class StockRentalAvailabilityController(http.Controller):
         if company_id:
             company = env['res.company'].browse(company_id)
 
-        line_model = env['stock.rental.booking.line'].with_context(
+        line_model = env['tl.rental.booking.line'].with_context(
             allowed_company_ids=[company.id]
         )
 
@@ -63,11 +63,11 @@ class StockRentalAvailabilityController(http.Controller):
         return grid
 
     @http.route(
-        '/stock_rental/availability_grid/booking',
+        '/tlrm/availability_grid/booking',
         type='json',
         auth='user'
     )
-    def stock_rental_availability_booking(
+    def tlrm_availability_booking(
         self,
         booking_id,
         week_count=12,
@@ -82,12 +82,12 @@ class StockRentalAvailabilityController(http.Controller):
         except (TypeError, ValueError):
             return {'error': 'invalid_booking_id'}
 
-        booking = env['stock.rental.booking'].browse(booking_id)
+        booking = env['tl.rental.booking'].browse(booking_id)
         if not booking.exists():
             return {'error': 'booking_not_found'}
 
         company = booking.company_id
-        line_model = env['stock.rental.booking.line'].with_context(
+        line_model = env['tl.rental.booking.line'].with_context(
             allowed_company_ids=[company.id]
         )
 

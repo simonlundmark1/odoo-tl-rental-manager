@@ -3,50 +3,50 @@ from odoo import models, fields, api
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
     
-    rental_price_hour = fields.Monetary(string="Rental Price per Hour")
-    rental_price_day = fields.Monetary(string="Rental Price per Day")
-    rental_price_week = fields.Monetary(string="Rental Price per Week")
+    tlrm_price_hour = fields.Monetary(string="Rental Price per Hour")
+    tlrm_price_day = fields.Monetary(string="Rental Price per Day")
+    tlrm_price_week = fields.Monetary(string="Rental Price per Week")
     
-    rental_min_hours = fields.Float(string="Min. Rental Hours", default=1.0)
-    rental_min_days = fields.Float(string="Min. Rental Days", default=0.0)
-    rental_min_weeks = fields.Float(string="Min. Rental Weeks", default=0.0)
+    tlrm_min_hours = fields.Float(string="Min. Rental Hours", default=1.0)
+    tlrm_min_days = fields.Float(string="Min. Rental Days", default=0.0)
+    tlrm_min_weeks = fields.Float(string="Min. Rental Weeks", default=0.0)
     
-    rental_reserved_units = fields.Integer(
+    tlrm_reserved_units = fields.Integer(
         string="Reserved Units", 
-        compute="_compute_rental_counts", 
+        compute="_compute_tlrm_counts", 
         store=False,
         help="Units reserved in future bookings."
     )
-    rental_rented_units = fields.Integer(
+    tlrm_rented_units = fields.Integer(
         string="Rented Units", 
-        compute="_compute_rental_counts", 
+        compute="_compute_tlrm_counts", 
         store=False,
         help="Units currently in ongoing bookings."
     )
-    rental_available_units = fields.Integer(
+    tlrm_available_units = fields.Integer(
         string="Available Units", 
-        compute="_compute_rental_counts", 
+        compute="_compute_tlrm_counts", 
         store=False
     )
     
-    rental_status = fields.Selection([
+    tlrm_status = fields.Selection([
         ('available', 'Available'),
         ('reserved', 'Reserved'),
         ('rented', 'Rented'),
         ('unavailable', 'Unavailable'),
-    ], string="Rental Status", compute="_compute_rental_status", store=False)
+    ], string="Rental Status", compute="_compute_tlrm_status", store=False)
 
-    @api.depends('rental_available_units', 'rental_reserved_units', 'rental_rented_units')
-    def _compute_rental_status(self):
+    @api.depends('tlrm_available_units', 'tlrm_reserved_units', 'tlrm_rented_units')
+    def _compute_tlrm_status(self):
         for product in self:
-            if product.rental_rented_units > 0:
-                product.rental_status = 'rented'
-            elif product.rental_reserved_units > 0:
-                product.rental_status = 'reserved'
-            elif product.rental_available_units <= 0:
-                product.rental_status = 'unavailable'
+            if product.tlrm_rented_units > 0:
+                product.tlrm_status = 'rented'
+            elif product.tlrm_reserved_units > 0:
+                product.tlrm_status = 'reserved'
+            elif product.tlrm_available_units <= 0:
+                product.tlrm_status = 'unavailable'
             else:
-                product.rental_status = 'available'
+                product.tlrm_status = 'available'
 
     @api.depends('product_variant_ids')  # Dependencies also need to trigger on booking changes, handled via triggers or manually?
     # In Odoo, we usually depend on a One2many relation or we have to trigger recomputation from the other side.
@@ -70,10 +70,10 @@ class ProductTemplate(models.Model):
     # However, the prompt does not explicitly ask for the One2many on the product, but it's necessary for the `depends` to work efficiently.
     # I will implement `_compute_rental_counts` using search_count/read_group for robustness and triggering.
     
-    def _compute_rental_counts(self):
+    def _compute_tlrm_counts(self):
         # This compute method needs to handle recomputation.
-        # We will query stock.rental.booking.line.
-        BookingLine = self.env['stock.rental.booking.line']
+        # We will query tl.rental.booking.line.
+        BookingLine = self.env['tl.rental.booking.line']
         Quant = self.env['stock.quant']
         for product in self:
             # Get related product.product IDs
@@ -109,7 +109,7 @@ class ProductTemplate(models.Model):
                     reserved_qty = groups[0].get('reserved_quantity', 0.0) or 0.0
                     base_capacity = max(quantity - reserved_qty, 0.0)
 
-            product.rental_reserved_units = reserved
-            product.rental_rented_units = rented
-            product.rental_available_units = max(base_capacity - reserved - rented, 0.0)
+            product.tlrm_reserved_units = reserved
+            product.tlrm_rented_units = rented
+            product.tlrm_available_units = max(base_capacity - reserved - rented, 0.0)
 

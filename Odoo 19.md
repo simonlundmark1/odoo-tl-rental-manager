@@ -64,9 +64,27 @@
 - För OWL-baserade backend-komponenter (client actions, views) gäller:
   - QWeb-templates som används av OWL **måste** ligga under `static/src/xml/`.
   - XML-filen måste dessutom registreras i `web.assets_backend` i `__manifest__.py`, t.ex.:
-    - `"stock_rental_manager/static/src/xml/rental_availability_templates.xml"`.
+    - `"tl_rental_manager/static/src/xml/rental_availability_templates.xml"`.
 - Om templatet bara ligger i `views/*.xml` och inte i `static/src/xml` + assets kommer OWL att kasta:
   - `OwlError: Missing template: "<t-name>" (for component "<ComponentName>")`.
 - Mönster i den här modulen:
   - JS-klasser i `static/src/js/` (`@odoo-module`).
   - Tillhörande OWL-templates i `static/src/xml/*.xml` med samma `t-name` som anges på komponenten.
+
+## 9. `res.groups` – `category_id` borttaget
+
+- I Odoo 19 har fältet `category_id` **tagits bort** från modellen `res.groups`.
+- Försök att definiera grupper med `<field name="category_id" ref="..."/>` ger felet:
+  - `ValueError: Invalid field 'category_id' in 'res.groups'`.
+- Tidigare versioner (≤18) använde `category_id` för att gruppera säkerhetsgrupper under modulkategorier i användargränssnittet.
+- **Lösning i Odoo 19:**
+  - Ta bort `category_id`-fältet helt från XML-definitionen av `res.groups`.
+  - Grupper definieras nu enbart med `name` och eventuellt `implied_ids`.
+- Exempel på korrekt gruppdefinition i Odoo 19:
+  ```xml
+  <record id="tlrm_group_user" model="res.groups">
+      <field name="name">TL Rental User</field>
+      <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+  </record>
+  ```
+- **OBS:** `ir.module.category` finns fortfarande, men kopplingen till `res.groups` via `category_id` är borta.

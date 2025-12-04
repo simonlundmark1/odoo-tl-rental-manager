@@ -1,6 +1,6 @@
-# Rental How-To (stock_rental_manager)
+# Rental How-To (tl_rental_manager)
 
-Det här dokumentet beskriver **hur** man arbetar praktiskt med uthyrning i Odoo med modulen `stock_rental_manager`.
+Det här dokumentet beskriver **hur** man arbetar praktiskt med uthyrning i Odoo med modulen `tl_rental_manager`.
 
 Målbilden är:
 
@@ -14,7 +14,7 @@ Målbilden är:
 
 ## 1. Förutsättningar
 
-- Modulen `stock_rental_manager` är installerad.
+- Modulen `tl_rental_manager` är installerad.
 - Ett eller flera **source warehouses** (ordinarie lager) är konfigurerade.
 - Ett eller flera **rental warehouses** (lager som representerar "ute på uthyrning") är konfigurerade.
 - Produkter som ska hyras är vanliga storable produkter i Odoo.
@@ -157,10 +157,10 @@ På produktformuläret finns en flik **Bookings** som ger överblick:
 - **Pricing**
   - Pris per timme/dag/vecka.
 - **Availability**
-  - `rental_status` – sammanfattning (Available / Reserved / Rented / Unavailable).
-  - `rental_available_units` – global tillgänglighet (alla interna lager) minus bokade/uthyrda enheter.
-  - `rental_reserved_units` – hur mycket som är bokat framåt.
-  - `rental_rented_units` – hur mycket som är ute nu.
+  - `tlrm_status` – sammanfattning (Available / Reserved / Rented / Unavailable).
+  - `tlrm_available_units` – global tillgänglighet (alla interna lager) minus bokade/uthyrda enheter.
+  - `tlrm_reserved_units` – hur mycket som är bokat framåt.
+  - `tlrm_rented_units` – hur mycket som är ute nu.
 
 Denna flik är **översiktlig**, medan själva besluten kring tillgänglighet per datum och warehouse hanteras i bokningen.
 

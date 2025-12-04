@@ -16,6 +16,7 @@
     ],
     "assets": {
         "web.assets_backend": [
+            "tl_rental_manager/static/src/css/rental_availability.css",
             "tl_rental_manager/static/src/js/rental_calendar.js",
             "tl_rental_manager/static/src/js/rental_availability_action.js",
             "tl_rental_manager/static/src/xml/rental_availability_templates.xml",

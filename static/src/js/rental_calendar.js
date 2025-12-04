@@ -7,7 +7,7 @@ import { patch } from "@web/core/utils/patch";
 patch(CalendarRenderer.prototype, {
     getOptions() {
         const options = super.getOptions();
-        if (this.props.model && this.props.model.resModel === 'stock.rental.booking') {
+        if (this.props.model && this.props.model.resModel === 'tl.rental.booking') {
             options.weekNumbers = true;
             options.weekLabel = "V.";
             options.firstDay = 1;
