@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # TL Rental Manager
 
 Odoo 19 Community module for managing stockable product rentals with project-based bookings and availability planning.
@@ -209,4 +208,3 @@ License
 -------
 
 This module is licensed under the LGPL‑3 license.
->>>>>>> 6b9fd7d2f69a3a04742cd17a95474083b250e6bf
