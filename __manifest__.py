@@ -1,12 +1,13 @@
 {
-    "name": "Stock Rental Manager",
+    "name": "TL Rental Manager",
     "summary": "Manage stockable product rentals and project bookings with availability and calendar planning",
     "version": "19.0.1.0.0",
-    "author": "Me",
-    "website": "",
+    "author": "simonlundmark1",
+    "website": "https://github.com/simonlundmark1",
     "category": "Inventory",
-    "depends": ["base", "product", "stock", "project"],
+    "depends": ["base", "product", "stock", "project", "mail"],
     "data": [
+        "security/rental_security.xml",
         "security/ir.model.access.csv",
         "data/rental_sequence.xml",
         "data/rental_cron.xml",
@@ -15,11 +16,12 @@
     ],
     "assets": {
         "web.assets_backend": [
-            "stock_rental_manager/static/src/js/rental_calendar.js",
+            "tl_rental_manager/static/src/js/rental_calendar.js",
+            "tl_rental_manager/static/src/js/rental_availability_action.js",
+            "tl_rental_manager/static/src/xml/rental_availability_templates.xml",
         ],
     },
     "application": True,
     "installable": True,
     "license": "LGPL-3",
 }
-

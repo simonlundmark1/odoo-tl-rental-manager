@@ -1,6 +1,8 @@
 from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError
 import logging
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -295,24 +297,13 @@ class StockRentalBookingLine(models.Model):
                 ('location_id.usage', '=', 'internal'),
             ]
 
-            logger.warning("RENTAL AVAIL DEBUG domain_quant=%s", domain_quant)
             groups = Quant.read_group(domain_quant, ['quantity:sum', 'reserved_quantity:sum'], [])
-            logger.warning("RENTAL AVAIL DEBUG groups=%s", groups)
             if groups:
                 quantity = groups[0].get('quantity', 0.0) or 0.0
                 reserved_qty = groups[0].get('reserved_quantity', 0.0) or 0.0
                 base_capacity = quantity - reserved_qty
-                logger.warning(
-                    "RENTAL AVAIL DEBUG product=%s company=%s quantity=%s reserved=%s base_capacity=%s",
-                    product.id,
-                    company.id if company else None,
-                    quantity,
-                    reserved_qty,
-                    base_capacity,
-                )
             else:
                 base_capacity = 0.0
-                logger.warning("RENTAL AVAIL DEBUG no quants found for domain %s", domain_quant)
 
             if base_capacity <= 0:
                 raise ValidationError(_(
@@ -343,3 +334,224 @@ class StockRentalBookingLine(models.Model):
         for line in self:
             if line.state in ['reserved', 'ongoing', 'finished']:
                 line._check_line_availability()
+
+    @api.model
+    def get_availability_grid(
+        self,
+        product_ids,
+        date_start,
+        week_count=12,
+        warehouse_id=None,
+        company_id=None,
+        needed_by_product=None,
+    ):
+        """Return a per-product, per-week availability grid for rentals.
+
+        :param product_ids: list of product.product ids to include as rows.
+        :param date_start: reference date (datetime or string); grid is aligned to the
+            Monday of the week containing this date.
+        :param week_count: number of weeks to include (capped internally).
+        :param warehouse_id: optional stock.warehouse id used as source warehouse
+            for capacity and booking-lines filtering.
+        :param company_id: optional res.company id; defaults to current company.
+        :param needed_by_product: optional dict {product_id: qty} used mainly for
+            booking-specific views to highlight if capacity is sufficient.
+        :return: dict with ``meta``, ``columns`` and ``rows`` suitable for OWL grids.
+        """
+        # Normalise inputs
+        if not product_ids:
+            product_ids = []
+        elif isinstance(product_ids, int):
+            product_ids = [product_ids]
+
+        week_count = int(week_count or 0)
+        if week_count <= 0:
+            week_count = 12
+        max_week_count = 20
+        if week_count > max_week_count:
+            week_count = max_week_count
+
+        needed_by_product = needed_by_product or {}
+
+        company = self.env['res.company'].browse(company_id) if company_id else self.env.company
+        self = self.with_context(allowed_company_ids=[company.id])
+
+        # Parse and normalise date_start, then align to Monday (ISO week)
+        if date_start:
+            base_dt = fields.Datetime.to_datetime(date_start)
+        else:
+            base_dt = fields.Datetime.now()
+
+        base_date = base_dt.date()
+        weekday = base_date.weekday()  # Monday = 0
+        monday_date = base_date - timedelta(days=weekday)
+        monday_dt = datetime.combine(monday_date, datetime.min.time())
+
+        weeks = []
+        for index in range(week_count):
+            week_start_dt = monday_dt + timedelta(weeks=index)
+            week_end_dt = week_start_dt + timedelta(days=7)
+            iso_year, iso_week, _ = week_start_dt.isocalendar()
+            column_key = f"{iso_year}-W{iso_week:02d}"
+            weeks.append({
+                'key': column_key,
+                'label': f"V.{iso_week}",
+                'start_dt': week_start_dt,
+                'end_dt': week_end_dt,
+            })
+
+        if weeks:
+            overall_start_dt = weeks[0]['start_dt']
+            overall_end_dt = weeks[-1]['end_dt']
+        else:
+            # Should not happen with current week_count logic, but keep sane defaults.
+            overall_start_dt = monday_dt
+            overall_end_dt = monday_dt
+
+        # Compute base capacity per product via stock.quant
+        Quant = self.env['stock.quant']
+        domain_quant = [
+            ('product_id', 'in', product_ids),
+            ('company_id', '=', company.id),
+        ]
+        if warehouse_id:
+            warehouse = self.env['stock.warehouse'].browse(warehouse_id)
+            if warehouse and warehouse.lot_stock_id:
+                domain_quant.append(('location_id', 'child_of', warehouse.lot_stock_id.id))
+            else:
+                # Fall back to all internal locations if warehouse is misconfigured
+                domain_quant.append(('location_id.usage', '=', 'internal'))
+        else:
+            domain_quant.append(('location_id.usage', '=', 'internal'))
+
+        base_capacity_by_product = defaultdict(float)
+        if product_ids:
+            groups = Quant.read_group(
+                domain_quant,
+                ['product_id', 'quantity:sum', 'reserved_quantity:sum'],
+                ['product_id'],
+            )
+            for group in groups:
+                product_field = group.get('product_id')
+                if isinstance(product_field, (list, tuple)):
+                    product_id = product_field[0]
+                else:
+                    product_id = product_field
+                if not product_id:
+                    continue
+                quantity = group.get('quantity', 0.0) or 0.0
+                reserved_qty = group.get('reserved_quantity', 0.0) or 0.0
+                base_capacity_by_product[product_id] = max(quantity - reserved_qty, 0.0)
+
+        # Pre-compute booked quantities per product & week from booking lines
+        booked_by_product_week = defaultdict(lambda: defaultdict(float))
+        if product_ids and weeks:
+            domain_lines = [
+                ('product_id', 'in', product_ids),
+                ('company_id', '=', company.id),
+                ('state', 'in', ['reserved', 'ongoing']),
+                ('date_start', '<', fields.Datetime.to_string(overall_end_dt)),
+                ('date_end', '>', fields.Datetime.to_string(overall_start_dt)),
+            ]
+            if warehouse_id:
+                domain_lines.append(('source_warehouse_id', '=', warehouse_id))
+
+            lines = self.search(domain_lines)
+            for line in lines:
+                if not line.product_id:
+                    continue
+                pid = line.product_id.id
+                line_start = fields.Datetime.to_datetime(line.date_start) if line.date_start else None
+                line_end = fields.Datetime.to_datetime(line.date_end) if line.date_end else None
+                if not line_start or not line_end:
+                    continue
+                for week in weeks:
+                    ws = week['start_dt']
+                    we = week['end_dt']
+                    # Overlap check: [line_start, line_end) vs [ws, we)
+                    if line_start < we and line_end > ws:
+                        booked_by_product_week[pid][week['key']] += line.quantity
+
+        # Build column descriptors for the frontend
+        columns = []
+        for week in weeks:
+            columns.append({
+                'key': week['key'],
+                'label': week['label'],
+                'start': fields.Datetime.to_string(week['start_dt']),
+                'end': fields.Datetime.to_string(week['end_dt']),
+            })
+
+        # Build row data per product
+        products = self.env['product.product'].browse(product_ids)
+        rows = []
+        for product in products:
+            base_capacity = float(base_capacity_by_product.get(product.id, 0.0) or 0.0)
+            needed = float(needed_by_product.get(product.id, 0.0) or 0.0)
+            cells = []
+            for week in weeks:
+                week_key = week['key']
+                booked = float(booked_by_product_week[product.id].get(week_key, 0.0) or 0.0)
+                available = max(base_capacity - booked, 0.0)
+
+                cell_needed = needed if needed > 0.0 else None
+                status = 'free'
+                booking_ok = None
+
+                if cell_needed is not None:
+                    if available >= cell_needed:
+                        status = 'free'
+                        booking_ok = True
+                    elif available > 0.0:
+                        status = 'partial'
+                        booking_ok = False
+                    else:
+                        status = 'full'
+                        booking_ok = False
+                else:
+                    if available <= 0.0:
+                        status = 'full'
+                    else:
+                        status = 'free'
+
+                try:
+                    tooltip = _(
+                        "Booked: %(booked)s, Available: %(available)s",
+                        booked=booked,
+                        available=available,
+                    )
+                except Exception:
+                    tooltip = None
+
+                cells.append({
+                    'column_key': week_key,
+                    'booked': booked,
+                    'available': available,
+                    'needed': cell_needed,
+                    'status': status,
+                    'booking_ok': booking_ok,
+                    'tooltip': tooltip,
+                })
+
+            rows.append({
+                'product_id': product.id,
+                'display_name': product.display_name,
+                'default_code': product.default_code,
+                'uom_name': product.uom_id.name,
+                'base_capacity': base_capacity,
+                'needed': needed if needed > 0.0 else None,
+                'cells': cells,
+            })
+
+        result = {
+            'meta': {
+                'company_id': company.id,
+                'warehouse_id': warehouse_id,
+                'date_start': fields.Datetime.to_string(overall_start_dt),
+                'date_end': fields.Datetime.to_string(overall_end_dt),
+                'week_count': week_count,
+            },
+            'columns': columns,
+            'rows': rows,
+        }
+        return result

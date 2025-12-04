@@ -1,3 +1,5 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_stock_rental_booking_user,stock.rental.booking.user,model_stock_rental_booking,base.group_user,1,1,1,1
-access_stock_rental_booking_line_user,stock.rental.booking.line.user,model_stock_rental_booking_line,base.group_user,1,1,1,1
+access_stock_rental_booking_user,stock.rental.booking.user,model_stock_rental_booking,tl_rental_manager.group_rental_user,1,1,1,0
+access_stock_rental_booking_manager,stock.rental.booking.manager,model_stock_rental_booking,tl_rental_manager.group_rental_manager,1,1,1,1
+access_stock_rental_booking_line_user,stock.rental.booking.line.user,model_stock_rental_booking_line,tl_rental_manager.group_rental_user,1,1,1,0
+access_stock_rental_booking_line_manager,stock.rental.booking.line.manager,model_stock_rental_booking_line,tl_rental_manager.group_rental_manager,1,1,1,1

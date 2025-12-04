@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="rental_availability_templates" xml:space="preserve">
+    <t t-name="tl_rental_manager.RentalAvailabilityAction">
+        <div class="o_rental_availability_action">
+            <t t-if="state.loading">
+                <div class="o_rental_availability_message text-muted">
+                    <p>Loading rental availability...</p>
+                </div>
+            </t>
+            <t t-elif="state.error">
+                <div class="alert alert-danger" role="alert">
+                    <t t-esc="state.error"/>
+                </div>
+            </t>
+            <t t-elif="!rows.length">
+                <div class="o_rental_availability_message text-muted">
+                    <p>No products found for rental availability.</p>
+                </div>
+            </t>
+            <t t-else="">
+                <div class="o_rental_availability_table_wrapper o-flex-grow-1 o-overflow-auto">
+                    <table class="table table-sm table-bordered o_rental_availability_table">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <t t-foreach="columns" t-as="col" t-key="col.key">
+                                    <th t-att-title="col.start + ' - ' + col.end">
+                                        <t t-esc="col.label"/>
+                                    </th>
+                                </t>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <t t-foreach="rows" t-as="row" t-key="row.product_id">
+                                <tr>
+                                    <td>
+                                        <a href="#" t-on-click.prevent="openProduct(row)">
+                                            <t t-esc="row.display_name"/>
+                                        </a>
+                                    </td>
+                                    <t t-foreach="row.cells" t-as="cell" t-key="cell.column_key">
+                                        <td
+                                            t-att-title="cell.tooltip or ''"
+                                            t-att-class="'text-center align-middle o_rental_availability_cell'"
+                                            t-att-style="cell.status === 'free' ? 'background-color:#d4edda;' : (cell.status === 'full' ? 'background-color:#f8d7da;' : 'background-color:#fff3cd;')"
+                                        >
+                                            <t t-esc="cell.available"/>
+                                        </td>
+                                    </t>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

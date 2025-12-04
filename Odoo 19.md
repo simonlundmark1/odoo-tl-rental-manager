@@ -58,3 +58,15 @@
 - Rekommenderat arbetssätt:
   - Skicka bara standardfält: `product_id`, `product_uom`, `product_uom_qty`, `picking_id`, `company_id`, `location_id`, `location_dest_id`, osv.
   - Låt Odoo själv hantera visningsnamn (`display_name`) baserat på produkt och plockning.
+
+## 8. OWL-komponenter och QWeb-templates
+
+- För OWL-baserade backend-komponenter (client actions, views) gäller:
+  - QWeb-templates som används av OWL **måste** ligga under `static/src/xml/`.
+  - XML-filen måste dessutom registreras i `web.assets_backend` i `__manifest__.py`, t.ex.:
+    - `"stock_rental_manager/static/src/xml/rental_availability_templates.xml"`.
+- Om templatet bara ligger i `views/*.xml` och inte i `static/src/xml` + assets kommer OWL att kasta:
+  - `OwlError: Missing template: "<t-name>" (for component "<ComponentName>")`.
+- Mönster i den här modulen:
+  - JS-klasser i `static/src/js/` (`@odoo-module`).
+  - Tillhörande OWL-templates i `static/src/xml/*.xml` med samma `t-name` som anges på komponenten.

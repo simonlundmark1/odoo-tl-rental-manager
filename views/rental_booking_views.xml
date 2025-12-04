@@ -12,9 +12,15 @@
         </field>
     </record>
 
+    <record id="action_stock_rental_availability" model="ir.actions.client">
+        <field name="name">Rental Availability</field>
+        <field name="tag">stock_rental_availability_global</field>
+    </record>
+
     <!-- Menu -->
     <menuitem id="menu_stock_rental_root" name="Rental" parent="stock.menu_stock_root" sequence="20"/>
     <menuitem id="menu_stock_rental_booking" name="Bookings" parent="menu_stock_rental_root" action="action_stock_rental_booking" sequence="10"/>
+    <menuitem id="menu_stock_rental_availability" name="Availability" parent="menu_stock_rental_root" action="action_stock_rental_availability" sequence="20"/>
 
     <!-- List View -->
     <record id="view_stock_rental_booking_list" model="ir.ui.view">
