@@ -8,6 +8,13 @@ Odoo 19 Community module for managing stockable product rentals with project-bas
 - **Availability Grid**: Visual week-by-week availability calendar for all products
 - **Stock Integration**: Automatic stock moves when confirming/returning rentals
 - **Multi-company Support**: Full multi-company record rules
+- **Calendar Integration**: Week numbers tuned for Swedish conventions
+
+## Use Cases
+
+- Rent out physical equipment (tools, machines, vehicles)
+- Plan project-specific rentals and check stock availability
+- Get a quick overview of booked vs available units per week
 
 ## Module Structure
 
@@ -45,7 +52,7 @@ tl_rental_manager/
 
 ## Naming Conventions
 
-This module follows Odoo 19 community guidelines with unique prefixes to avoid conflicts:
+This module follows Odoo 19 community guidelines with unique prefixes:
 
 | Type | Prefix | Example |
 |------|--------|---------|
@@ -67,6 +74,7 @@ Stock users automatically inherit TL Rental User permissions.
 ## Models
 
 ### tl.rental.booking
+
 Main booking header with:
 - Project reference (required)
 - Source/Rental warehouse
@@ -74,6 +82,7 @@ Main booking header with:
 - State workflow: draft → reserved → ongoing → finished → returned
 
 ### tl.rental.booking.line
+
 Booking lines with:
 - Product and quantity
 - Warehouse overrides per line
@@ -82,129 +91,44 @@ Booking lines with:
 ## Availability Grid
 
 The availability grid (`Inventory → Rental → Availability`) provides:
-- Week-by-week view of product availability
-- Color-coded cells (green=free, yellow=partial, red=full)
-- Click-to-drill-down on booked cells
-- Search and sort functionality
-- Week navigation (Previous/Today/Next)
+
+- Week-by-week view of product availability (12 weeks at a time)
+- Color-coded cells: green (free), yellow (partial), red (full)
+- Click booked cells to drill-down to booking lines
+- Search bar for filtering products by name/code
+- Sortable product column (A-Z / Z-A)
+- Week navigation (Previous / Today / Next)
+- Hover effects on clickable cells
+
+## Configuration
+
+1. Install the module via Apps
+2. Assign security groups to users:
+   - **Rental User** for basic usage
+   - **Rental Manager** for full CRUD access
+3. (Optional) Adjust the scheduled action in *Settings → Technical → Scheduled Actions*
+
+## Usage
+
+1. Go to **Inventory → Rental → Bookings**
+2. Create a new booking with project, dates, and warehouse
+3. Add booking lines with products and quantities
+4. Confirm to reserve stock
+5. Use **Availability** view to check capacity across all products
+
+## Technical Details
+
+- **Availability computation**: `tl.rental.booking.line.get_availability_grid()`
+- **OWL client action**: `static/src/js/rental_availability_action.js`
+- **Controller endpoints**:
+  - `/tlrm/availability_grid/global`
+  - `/tlrm/availability_grid/booking`
 
 ## Dependencies
 
-- `base`
-- `product`
-- `stock`
-- `project`
-- `mail`
-
-## Installation
-
-1. Place module in your Odoo addons path
-2. Update apps list: `Settings → Apps → Update Apps List`
-3. Install: Search for "TL Rental Manager" and click Install
+- Odoo 19.0 Community
+- Core modules: `base`, `product`, `stock`, `project`, `mail`
 
 ## License
 
 LGPL-3
-=======
-TL Rental Manager
-=================
-
-Overview
---------
-
-TL Rental Manager adds rental management on top of stockable products and
-projects. It lets you:
-
-- Plan and track product rentals by period.
-- Link rentals to projects or tasks.
-- Check availability with a week‑based capacity grid.
-- Keep stock and reservations consistent during the rental lifecycle.
-
-Use Cases
----------
-
-- Rent out physical equipment (tools, machines, vehicles).
-- Plan project‑specific rentals and see if stock is sufficient.
-- Get a quick overview of booked vs available units per week.
-
-Main Features
--------------
-
-- Rental bookings with lines, periods and states (draft, reserved, ongoing, finished).
-- Automatic booking sequence and scheduled job to update states.
-- Availability grid per product and week, based on `stock.quant` and existing bookings.
-- Calendar integration with week numbers tuned for Swedish conventions.
-- Multi‑company aware domains and record rules.
-- Dedicated security groups for rental users and managers.
-
-Configuration
--------------
-
-1. Install the module *TL Rental Manager*.
-2. Assign security groups:
-
-   - **Rental User** (basic usage).
-   - **Rental Manager** (full CRUD, configuration).
-
-3. (Optional) Adjust the scheduled action:
-
-   - *Settings → Technical → Automation → Scheduled Actions*
-   - **Stock Rental Booking: Update States**
-
-Usage
------
-
-- Go to **Inventory / Rentals** (or your configured menu entry).
-- Create a **Rental Booking**:
-  
-  - Select customer, company and rental period.
-  - Add **Rental Booking Lines** with products and quantities.
-  - Confirm to reserve stock.
-
-- Open the **Rental Availability** action to:
-
-  - See weekly capacity per product.
-  - Check booked vs available units.
-  - Drill down to the product form from the grid.
-
-Security
---------
-
-- Access rights are defined per model and group in
-  `[security/ir.model.access.csv](cci:7://file:///c:/odoo_custom_addons/tl-rental-manager/security/ir.model.access.csv:0:0-0:0)`.
-- Multi‑company access is enforced via record rules in
-  `[security/rental_security.xml](cci:7://file:///c:/odoo_custom_addons/tl-rental-manager/security/rental_security.xml:0:0-0:0)`.
-- Sequences are protected with ``noupdate="1"`` to avoid changes on upgrade.
-
-Technical Details
------------------
-
-- Models:
-
-  - ``stock.rental.booking``
-  - ``stock.rental.booking.line``
-
-- Key technical components:
-
-  - Availability computation in
-    `[stock.rental.booking.line.get_availability_grid](cci:1://file:///c:/odoo_custom_addons/stock_rental_manager/models/rental_booking.py:337:4-556:21)`.
-  - OWL front‑end action and template for the availability grid:
-
-    - JS: `[static/src/js/rental_availability_action.js](cci:7://file:///c:/odoo_custom_addons/tl-rental-manager/static/src/js/rental_availability_action.js:0:0-0:0)`
-    - XML: `[static/src/xml/rental_availability_templates.xml](cci:7://file:///c:/odoo_custom_addons/tl-rental-manager/static/src/xml/rental_availability_templates.xml:0:0-0:0)`
-
-  - Controller endpoints for JSON availability:
-
-    - ``/stock_rental/availability_grid/global``
-    - ``/stock_rental/availability_grid/booking``
-
-Dependencies
-------------
-
-- Odoo 19.0 Community
-- Core modules: ``base``, ``product``, ``stock``, ``project``, ``mail``
-
-License
--------
-
-This module is licensed under the LGPL‑3 license.
