@@ -119,6 +119,40 @@ class TlRentalBooking(models.Model):
     def action_cancel(self):
         for booking in self:
             booking.state = 'cancelled'
+
+    def action_check_availability(self):
+        """Open the availability wizard for this booking's lines."""
+        self.ensure_one()
+        if not self.line_ids:
+            raise ValidationError(_("Add booking lines first before checking availability."))
+        
+        # Return action that will be handled by JS to open the wizard
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'tlrm_open_booking_availability_wizard',
+            'params': {
+                'booking_id': self.id,
+                'booking_lines': [{
+                    'product_id': line.product_id.id,
+                    'product_name': line.product_id.display_name,
+                    'quantity': line.quantity,
+                } for line in self.line_ids if line.product_id],
+                'warehouse_id': self.source_warehouse_id.id if self.source_warehouse_id else None,
+                'company_id': self.company_id.id,
+            },
+        }
+
+    def write(self, vals):
+        """Handle date updates from the availability wizard.
+        
+        When called with context key 'skip_date_tracking', we temporarily
+        disable tracking on date fields to avoid chatter noise from the
+        availability wizard (which is just a date picker).
+        """
+        if self.env.context.get('tlrm_skip_date_tracking'):
+            # Temporarily disable tracking for date fields
+            self = self.with_context(tracking_disable=True)
+        return super().write(vals)
             
     def _expand_states(self, states, domain, order):
         return [key for key, val in type(self).state.selection]

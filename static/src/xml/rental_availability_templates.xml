@@ -82,7 +82,7 @@
                                         <td
                                             t-att-title="cell.booked > 0 ? (cell.tooltip || '') + ' - Click to view bookings' : (cell.tooltip || '')"
                                             t-att-class="'text-center align-middle border-bottom o_tlrm_cell' + (cell.booked > 0 ? ' o_tlrm_cell_clickable' : '')"
-                                            t-att-style="'border-left: 1px solid #adb5bd !important; ' + (cell.status === 'free' ? 'background-color: #c3e6cb;' : (cell.status === 'full' ? 'background-color: #f5c6cb;' : 'background-color: #ffeeba;'))"
+                                            t-att-style="'border-left: 1px solid #adb5bd !important; background-color: ' + this.getCellColor(cell, row.base_capacity) + ';'"
                                             t-on-click="() => cell.booked > 0 &amp;&amp; this.openBookingsForCell(row.product_id, cell.column_key, colData?.start, colData?.end)"
                                         >
                                             <t t-esc="cell.available"/>

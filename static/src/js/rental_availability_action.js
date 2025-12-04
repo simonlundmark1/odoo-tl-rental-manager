@@ -204,6 +204,46 @@ export class TlrmAvailabilityAction extends Component {
     get sortIcon() {
         return this.state.sortOrder === "asc" ? "↑" : "↓";
     }
+
+    /**
+     * Calculate cell background color based on booking ratio.
+     * Green (0%) → Yellow (75%) → Red (100%)
+     * Uses smooth gradient interpolation.
+     */
+    getCellColor(cell, baseCapacity) {
+        const capacity = baseCapacity || 0;
+        const booked = cell.booked || 0;
+
+        // If no capacity, show red (full)
+        if (capacity <= 0) {
+            return "#f5c6cb";
+        }
+
+        // Calculate ratio: 0 = nothing booked (green), 1 = fully booked (red)
+        const ratio = Math.min(booked / capacity, 1);
+
+        // Color stops: green (#c3e6cb) → yellow (#ffeeba) → red (#f5c6cb)
+        // Green RGB: 195, 230, 203
+        // Yellow RGB: 255, 238, 186
+        // Red RGB: 245, 198, 203
+
+        let r, g, b;
+        if (ratio <= 0.75) {
+            // Green to Yellow (0% to 75%)
+            const t = ratio / 0.75; // normalize to 0-1
+            r = Math.round(195 + (255 - 195) * t);
+            g = Math.round(230 + (238 - 230) * t);
+            b = Math.round(203 + (186 - 203) * t);
+        } else {
+            // Yellow to Red (75% to 100%)
+            const t = (ratio - 0.75) / 0.25; // normalize to 0-1
+            r = Math.round(255 + (245 - 255) * t);
+            g = Math.round(238 + (198 - 238) * t);
+            b = Math.round(186 + (203 - 186) * t);
+        }
+
+        return `rgb(${r}, ${g}, ${b})`;
+    }
 }
 
 TlrmAvailabilityAction.template = "tl_rental_manager.TlrmAvailabilityAction";
