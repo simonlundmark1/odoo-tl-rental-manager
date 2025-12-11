@@ -11,6 +11,14 @@ class ProductTemplate(models.Model):
     tlrm_min_days = fields.Float(string="Min. Rental Days", default=0.0)
     tlrm_min_weeks = fields.Float(string="Min. Rental Weeks", default=0.0)
     
+    tlrm_fleet_capacity = fields.Float(
+        string="Fleet Capacity",
+        default=0.0,
+        help="Total units owned for rental. This is the theoretical maximum "
+             "available for booking, regardless of current physical location. "
+             "Used for availability calculations when items are out on rental."
+    )
+    
     tlrm_reserved_units = fields.Integer(
         string="Reserved Units", 
         compute="_compute_tlrm_counts", 
@@ -27,6 +35,12 @@ class ProductTemplate(models.Model):
         string="Available Units", 
         compute="_compute_tlrm_counts", 
         store=False
+    )
+    tlrm_booked_units = fields.Integer(
+        string="Booked Units",
+        compute="_compute_tlrm_counts",
+        store=False,
+        help="Units locked for pickup (hard commitment)."
     )
     
     tlrm_status = fields.Selection([
@@ -48,81 +62,71 @@ class ProductTemplate(models.Model):
             else:
                 product.tlrm_status = 'available'
 
-    @api.depends('product_variant_ids')  # Dependencies also need to trigger on booking changes, handled via triggers or manually?
-    # In Odoo, we usually depend on a One2many relation or we have to trigger recomputation from the other side.
-    # Since we don't have a direct One2many from product to booking lines here yet, we might need to 
-    # rely on the booking lines touching the product to trigger recomputation if we add a relation, 
-    # or we use a domain-based search in compute (which is slow if not careful).
-    # For store=True computed fields based on other models, we usually need an explicit depends if connected, 
-    # or we update the field manually when bookings change.
-    # Let's stick to standard Odoo patterns. We will make it depend on a relation we should probably add 
-    # or just compute it on the fly if store=False. 
-    # The prompt asks for store=True. 
-    # To make store=True work effectively with external changes, we usually need a One2many inverse.
-    # I'll add the One2many field `rental_booking_line_ids` to product.product/template to make the depends work.
-    # Wait, product.template vs product.product. The prompt says extend product.template.
-    # Rental units are usually managed at the variant level if they track specific stock, but here it seems simplified.
-    # Let's assume product.template is the main configuration point.
-    # If products have variants, total_units might be per variant. The prompt says "Model: product.template".
-    # I will assume standard single-variant products for simplicity unless 'product' variant logic is requested.
-    # I will add a dependency on a new One2many field I'll add: rental_booking_line_ids.
-    
-    # However, the prompt does not explicitly ask for the One2many on the product, but it's necessary for the `depends` to work efficiently.
-    # I will implement `_compute_rental_counts` using search_count/read_group for robustness and triggering.
-    
     def _compute_tlrm_counts(self):
-        """Compute rental availability counts.
+        """Compute rental availability counts using fleet capacity.
         
-        - Reserved: Units in 'reserved' state bookings (not yet picked up)
-        - Rented: Units in TL Rental Out locations (physically out)
-        - Available: Stock in source locations minus reserved bookings
+        Uses read_group for efficient batch querying instead of multiple searches.
+        
+        - Reserved: Units in 'reserved' state (soft hold, doesn't block availability)
+        - Booked: Units in 'booked' state (hard lock, blocks availability)
+        - Rented: Units in 'ongoing' or 'finished' state (physically out)
+        - Available: Fleet capacity minus booked and rented units
         """
-        BookingLine = self.env['tl.rental.booking.line']
-        Quant = self.env['stock.quant']
-        Warehouse = self.env['stock.warehouse']
-        
-        # Get all TL Rental Out location IDs
-        rental_location_ids = Warehouse.search([
-            ('company_id', '=', self.env.company.id),
-            ('tlrm_rental_location_id', '!=', False),
-        ]).mapped('tlrm_rental_location_id').ids
-        
-        # Get all source (stock) location IDs
-        stock_location_ids = Warehouse.search([
-            ('company_id', '=', self.env.company.id),
-        ]).mapped('lot_stock_id').ids
-        
+        # Initialize all products with zero values
         for product in self:
-            product_variant_ids = product.product_variant_ids.ids
-            
-            # Reserved: sum of quantities in 'reserved' state bookings
-            reserved_lines = BookingLine.search([
-                ('product_id', 'in', product_variant_ids),
-                ('state', '=', 'reserved'),
-                ('company_id', '=', self.env.company.id)
-            ])
-            reserved = sum(reserved_lines.mapped('quantity'))
-            
-            # Rented: physical stock in TL Rental Out locations
+            product.tlrm_reserved_units = 0
+            product.tlrm_booked_units = 0
+            product.tlrm_rented_units = 0
+            product.tlrm_available_units = 0
+        
+        if not self:
+            return
+        
+        # Collect all variant IDs for batch query
+        all_variant_ids = self.mapped('product_variant_ids').ids
+        if not all_variant_ids:
+            return
+        
+        BookingLine = self.env['tl.rental.booking.line']
+        company_id = self.env.company.id
+        
+        # Single read_group query for all states
+        domain = [
+            ('product_id', 'in', all_variant_ids),
+            ('state', 'in', ['reserved', 'booked', 'ongoing', 'finished']),
+            ('company_id', '=', company_id),
+        ]
+        groups = BookingLine._read_group(
+            domain,
+            groupby=['product_id', 'state'],
+            aggregates=['quantity:sum'],
+        )
+        
+        # Build lookup: product_id -> state -> quantity
+        qty_by_product_state = {}
+        for product_id, state, qty_sum in groups:
+            pid = product_id.id if product_id else False
+            if pid not in qty_by_product_state:
+                qty_by_product_state[pid] = {}
+            qty_by_product_state[pid][state] = qty_sum or 0.0
+        
+        # Assign values to each product template
+        for product in self:
+            reserved = 0.0
+            booked = 0.0
             rented = 0.0
-            if product_variant_ids and rental_location_ids:
-                rental_quants = Quant.search([
-                    ('product_id', 'in', product_variant_ids),
-                    ('location_id', 'in', rental_location_ids),
-                ])
-                rented = sum(rental_quants.mapped('quantity'))
             
-            # Available: stock in source locations minus reserved bookings
-            # (rented items are already NOT in source locations)
-            source_stock = 0.0
-            if product_variant_ids and stock_location_ids:
-                source_quants = Quant.search([
-                    ('product_id', 'in', product_variant_ids),
-                    ('location_id', 'child_of', stock_location_ids),
-                ])
-                source_stock = sum(source_quants.mapped('quantity'))
+            for variant in product.product_variant_ids:
+                state_qtys = qty_by_product_state.get(variant.id, {})
+                reserved += state_qtys.get('reserved', 0.0)
+                booked += state_qtys.get('booked', 0.0)
+                rented += state_qtys.get('ongoing', 0.0) + state_qtys.get('finished', 0.0)
+            
+            fleet_capacity = product.tlrm_fleet_capacity or 0.0
+            available = fleet_capacity - booked - rented
             
             product.tlrm_reserved_units = int(reserved)
+            product.tlrm_booked_units = int(booked)
             product.tlrm_rented_units = int(rented)
-            product.tlrm_available_units = int(max(source_stock - reserved, 0.0))
+            product.tlrm_available_units = int(max(available, 0.0))
 

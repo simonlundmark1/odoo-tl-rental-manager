@@ -46,6 +46,7 @@ class TlRentalBooking(models.Model):
     state = fields.Selection([
         ('draft', 'Draft'),
         ('reserved', 'Reserved'),
+        ('booked', 'Booked'),
         ('ongoing', 'Ongoing'),
         ('finished', 'Finished'),
         ('returned', 'Returned'),
@@ -64,6 +65,7 @@ class TlRentalBooking(models.Model):
         return super().create(vals_list)
 
     def action_confirm(self):
+        """Confirm booking: draft -> reserved (soft hold, no picking yet)."""
         for booking in self:
             # Validate header fields only when confirming
             if not booking.date_start:
@@ -75,28 +77,51 @@ class TlRentalBooking(models.Model):
             if not booking.project_id:
                 raise ValidationError(_("Project is required for Rental bookings."))
 
-            # Ensure all lines are complete and available when confirming
+            # Ensure all lines are complete
             for line in booking.line_ids:
                 if not line.product_id:
                     raise ValidationError(_("Each line must have a product before confirming a booking."))
                 if not line.source_warehouse_id:
                     raise ValidationError(_("Each line must have a Source Warehouse set."))
-                line._check_line_availability()
 
-            booking._create_start_picking()
+            # Reserved is a soft hold - no picking created yet, no hard availability check
             booking.state = 'reserved'
 
-    def action_mark_ongoing(self):
+    def action_book(self):
+        """Lock booking: reserved -> booked (hard commitment, creates pickings)."""
         for booking in self:
+            if booking.state != 'reserved':
+                raise ValidationError(_("Only reserved bookings can be locked."))
+            
+            # Hard availability check - this is the commitment point
+            for line in booking.line_ids:
+                line._check_line_availability()
+            
+            # Create outbound and return pickings
+            booking._create_start_picking()
+            booking._create_return_picking()
+            booking.state = 'booked'
+
+    def action_mark_ongoing(self):
+        """Mark as ongoing: booked -> ongoing (items physically out)."""
+        for booking in self:
+            if booking.state != 'booked':
+                raise ValidationError(_("Only booked bookings can be marked as ongoing."))
             booking.state = 'ongoing'
 
     def action_finish(self):
+        """Mark as finished: ongoing -> finished (past return date, awaiting return)."""
         for booking in self:
+            if booking.state != 'ongoing':
+                raise ValidationError(_("Only ongoing bookings can be marked as finished."))
             booking.state = 'finished'
 
     def action_return(self):
+        """Mark as returned: finished -> returned (items back in stock)."""
         for booking in self:
-            booking._create_return_picking()
+            if booking.state != 'finished':
+                raise ValidationError(_("Only finished bookings can be marked as returned."))
+            # Return pickings were already created at booking time
             booking.state = 'returned'
 
     def action_cancel(self):
@@ -295,11 +320,10 @@ class TlRentalBooking(models.Model):
             'location_dest_id': location_dest_id,
         }
 
-    def _create_picking_for_direction(self, direction):
-        """Create stock picking(s) for the given direction.
+    def _create_outbound_picking(self):
+        """Create outbound picking(s) to move products from source to rental location.
         
-        :param direction: 'out' for rental start (source -> TL Rental Out location),
-                          'in' for rental return (TL Rental Out -> source location)
+        Groups lines by source_warehouse_id.
         """
         Picking = self.env['stock.picking']
         Move = self.env['stock.move']
@@ -315,39 +339,108 @@ class TlRentalBooking(models.Model):
                 if not source_location or not rental_location:
                     continue
 
-                if direction == 'out':
-                    picking_type = source_wh.int_type_id
-                    location_id = source_location.id
-                    location_dest_id = rental_location.id
-                else:  # 'in'
-                    picking_type = source_wh.int_type_id
-                    location_id = rental_location.id
-                    location_dest_id = source_location.id
-
+                picking_type = source_wh.int_type_id
                 if not picking_type:
                     continue
 
                 picking_vals = booking._prepare_picking_vals(
-                    picking_type, location_id, location_dest_id, direction
+                    picking_type, source_location.id, rental_location.id, 'out'
                 )
                 picking = Picking.create(picking_vals)
 
                 for line in lines:
                     move_vals = booking._prepare_move_vals(
-                        line, picking, location_id, location_dest_id
+                        line, picking, source_location.id, rental_location.id
                     )
                     Move.create(move_vals)
 
                 picking.action_confirm()
                 picking.action_assign()
 
+    def _group_lines_for_return(self):
+        """Group booking lines by (source_warehouse, return_warehouse, expected_return_date).
+        
+        This allows creating separate return pickings for different destinations and dates.
+        
+        :return: dict mapping (source_wh_id, return_wh_id, return_date) to list of lines
+        """
+        self.ensure_one()
+        lines_by_return = {}
+        for line in self.line_ids:
+            if not line.product_id or line.quantity <= 0:
+                continue
+            if not line.source_warehouse_id:
+                continue
+            
+            source_wh_id = line.source_warehouse_id.id
+            return_wh_id = (line.return_warehouse_id.id if line.return_warehouse_id 
+                          else line.source_warehouse_id.id)
+            # Normalize return date to date only (ignore time) for grouping
+            return_date = (line.expected_return_date.date() if line.expected_return_date 
+                          else (line.booking_id.date_end.date() if line.booking_id.date_end else None))
+            
+            key = (source_wh_id, return_wh_id, return_date)
+            lines_by_return.setdefault(key, []).append(line)
+        return lines_by_return
+
+    def _create_return_pickings(self):
+        """Create return picking(s) grouped by return destination and date.
+        
+        Each unique combination of (source_warehouse, return_warehouse, expected_return_date)
+        gets its own return picking. This supports:
+        - Cross-warehouse returns (items returning to different warehouse than source)
+        - Partial returns on different dates
+        """
+        Picking = self.env['stock.picking']
+        Move = self.env['stock.move']
+
+        for booking in self:
+            lines_by_return = booking._group_lines_for_return()
+
+            for (source_wh_id, return_wh_id, return_date), lines in lines_by_return.items():
+                source_wh = self.env['stock.warehouse'].browse(source_wh_id)
+                return_wh = self.env['stock.warehouse'].browse(return_wh_id)
+                
+                # Source location is the rental location of the SOURCE warehouse
+                rental_location = source_wh.tlrm_rental_location_id
+                # Destination is the stock location of the RETURN warehouse
+                return_location = return_wh.lot_stock_id
+
+                if not rental_location or not return_location:
+                    continue
+
+                # Use the return warehouse's internal picking type
+                picking_type = return_wh.int_type_id
+                if not picking_type:
+                    continue
+
+                picking_vals = booking._prepare_picking_vals(
+                    picking_type, rental_location.id, return_location.id, 'in'
+                )
+                # Add scheduled date if we have a return date
+                if return_date:
+                    picking_vals['scheduled_date'] = fields.Datetime.to_string(
+                        datetime.combine(return_date, datetime.min.time())
+                    )
+                
+                picking = Picking.create(picking_vals)
+
+                for line in lines:
+                    move_vals = booking._prepare_move_vals(
+                        line, picking, rental_location.id, return_location.id
+                    )
+                    Move.create(move_vals)
+
+                picking.action_confirm()
+                # Don't assign return pickings yet - they'll be assigned when items are ready to return
+
     def _create_start_picking(self):
         """Create picking(s) to move products from source to rental location."""
-        self._create_picking_for_direction('out')
+        self._create_outbound_picking()
 
     def _create_return_picking(self):
-        """Create picking(s) to move products from rental back to source location."""
-        self._create_picking_for_direction('in')
+        """Create picking(s) to move products from rental back to return location."""
+        self._create_return_pickings()
 
 
 class TlRentalBookingLine(models.Model):
@@ -371,6 +464,18 @@ class TlRentalBookingLine(models.Model):
         readonly=True,
     )
     
+    # Return destination - defaults to source warehouse but can be changed
+    return_warehouse_id = fields.Many2one(
+        'stock.warehouse',
+        string="Return Warehouse",
+        check_company=True,
+        help="Warehouse where items will be returned. Defaults to source warehouse."
+    )
+    expected_return_date = fields.Datetime(
+        string="Expected Return Date",
+        help="Expected return date for this line. Defaults to booking end date."
+    )
+    
     product_id = fields.Many2one('product.product', string="Product")
     quantity = fields.Float(string="Quantity", default=1.0, digits='Product Unit of Measure')
     
@@ -380,26 +485,50 @@ class TlRentalBookingLine(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
-        """Ensure warehouse field is populated from booking header if not set."""
+        """Ensure warehouse and return fields are populated from booking header if not set."""
         for vals in vals_list:
-            if vals.get('booking_id') and not vals.get('source_warehouse_id'):
+            if vals.get('booking_id'):
                 booking = self.env['tl.rental.booking'].browse(vals['booking_id'])
-                if booking.source_warehouse_id:
+                if not vals.get('source_warehouse_id') and booking.source_warehouse_id:
                     vals['source_warehouse_id'] = booking.source_warehouse_id.id
+                # Default return warehouse to source warehouse
+                if not vals.get('return_warehouse_id'):
+                    vals['return_warehouse_id'] = vals.get('source_warehouse_id') or (booking.source_warehouse_id.id if booking.source_warehouse_id else False)
+                # Default expected return date to booking end date
+                if not vals.get('expected_return_date') and booking.date_end:
+                    vals['expected_return_date'] = booking.date_end
         return super().create(vals_list)
 
     @api.onchange('booking_id')
     def _onchange_booking_id(self):
         for line in self:
-            if line.booking_id and not line.source_warehouse_id:
-                line.source_warehouse_id = line.booking_id.source_warehouse_id
+            if line.booking_id:
+                if not line.source_warehouse_id:
+                    line.source_warehouse_id = line.booking_id.source_warehouse_id
+                if not line.return_warehouse_id:
+                    line.return_warehouse_id = line.source_warehouse_id or line.booking_id.source_warehouse_id
+                if not line.expected_return_date:
+                    line.expected_return_date = line.booking_id.date_end
+    
+    @api.onchange('source_warehouse_id')
+    def _onchange_source_warehouse_id(self):
+        """Default return warehouse to source warehouse when source changes."""
+        for line in self:
+            if line.source_warehouse_id and not line.return_warehouse_id:
+                line.return_warehouse_id = line.source_warehouse_id
 
     def _check_line_availability(self):
-        """Check if the requested quantity exceeds available stock.
+        """Check if the requested quantity exceeds available capacity.
         
-        Uses physical stock (stock.quant.quantity) minus overlapping 'reserved'
-        booking lines. Ongoing bookings are not counted since they already
-        reduced the physical stock.
+        Uses fleet capacity minus overlapping hard commitments (booked, ongoing, finished)
+        plus incoming returns to the source warehouse before the booking starts.
+        
+        Formula:
+            available = fleet_capacity
+                      - booked overlapping
+                      - ongoing overlapping  
+                      - finished overlapping
+                      + incoming returns (to source_wh, before date_start)
         """
         for line in self:
             if not line.product_id or not line.date_start or not line.date_end:
@@ -409,61 +538,77 @@ class TlRentalBookingLine(models.Model):
                 continue
 
             product = line.product_id
+            product_template = product.product_tmpl_id
             company = line.company_id or self.env.company
 
-            # Filter by source warehouse - use line's warehouse or fall back to booking header
+            # Filter by source warehouse
             source_wh = line.source_warehouse_id or line.booking_id.source_warehouse_id
-            source_location = source_wh.lot_stock_id if source_wh else None
             
-            # Get physical stock from quants (ignoring Odoo's reserved_quantity)
-            if source_location:
-                quants = self.env['stock.quant'].search([
-                    ('product_id', '=', product.id),
-                    ('location_id', 'child_of', source_location.id),
-                ])
-                base_capacity = sum(quants.mapped('quantity'))
-            else:
-                base_capacity = 0.0
+            # Get fleet capacity from product template
+            fleet_capacity = product_template.tlrm_fleet_capacity or 0.0
             
-            logger.info(
-                "Availability check for %s in warehouse %s (location %s): qty_available=%s",
+            logger.debug(
+                "Availability check for %s in warehouse %s: fleet_capacity=%s",
                 product.display_name,
                 source_wh.name if source_wh else 'N/A',
-                source_location.complete_name if source_location else 'N/A',
-                base_capacity,
+                fleet_capacity,
             )
 
-            if base_capacity <= 0:
+            if fleet_capacity <= 0:
                 raise ValidationError(_(
-                    "No available stock for product '%s' in the selected warehouse '%s'."
-                ) % (product.display_name, source_wh.name if source_wh else 'N/A'))
+                    "No fleet capacity configured for product '%s'. "
+                    "Please set the Fleet Capacity on the product."
+                ) % product.display_name)
 
+            # Find overlapping hard commitments (booked, ongoing, finished)
             domain = [
                 ('id', '!=', line.id),
                 ('product_id', '=', product.id),
                 ('company_id', '=', company.id if company else False),
-                ('state', '=', 'reserved'),  # Only reserved - ongoing already reduced qty_on_hand
+                ('state', 'in', ['booked', 'ongoing', 'finished']),
                 ('date_start', '<', line.date_end),
                 ('date_end', '>', line.date_start),
             ]
-            # Also filter overlapping bookings by the same source warehouse
             if source_wh:
                 domain.append(('source_warehouse_id', '=', source_wh.id))
             overlapping_lines = self.search(domain)
-            current_booked_qty = sum(overlapping_lines.mapped('quantity'))
+            committed_qty = sum(overlapping_lines.mapped('quantity'))
 
-            if current_booked_qty + line.quantity > base_capacity:
+            # Find incoming returns to this warehouse before booking starts
+            # These are items returning TO source_wh with expected_return_date before line.date_start
+            incoming_domain = [
+                ('id', '!=', line.id),
+                ('product_id', '=', product.id),
+                ('company_id', '=', company.id if company else False),
+                ('state', 'in', ['ongoing', 'finished']),
+                ('return_warehouse_id', '=', source_wh.id if source_wh else False),
+                ('expected_return_date', '<=', line.date_start),
+            ]
+            incoming_lines = self.search(incoming_domain)
+            incoming_qty = sum(incoming_lines.mapped('quantity'))
+
+            available = fleet_capacity - committed_qty + incoming_qty
+
+            logger.debug(
+                "Availability for %s: fleet=%s, committed=%s, incoming=%s, available=%s, requested=%s",
+                product.display_name, fleet_capacity, committed_qty, incoming_qty, available, line.quantity
+            )
+
+            if line.quantity > available:
                 raise ValidationError(_(
                     "Not enough availability for product '%s' during this period.\n"
-                    "Available capacity: %s\n"
-                    "Already booked: %s\n"
+                    "Fleet capacity: %s\n"
+                    "Already committed: %s\n"
+                    "Incoming returns: %s\n"
+                    "Available: %s\n"
                     "Requested: %s"
-                ) % (product.display_name, base_capacity, current_booked_qty, line.quantity))
+                ) % (product.display_name, fleet_capacity, committed_qty, incoming_qty, available, line.quantity))
 
     @api.constrains('product_id', 'date_start', 'date_end', 'state', 'company_id', 'quantity')
     def _constrains_check_availability(self):
+        """Only check availability for hard commitments (booked, ongoing, finished)."""
         for line in self:
-            if line.state in ['reserved', 'ongoing', 'finished']:
+            if line.state in ['booked', 'ongoing', 'finished']:
                 line._check_line_availability()
 
     @api.model
@@ -523,71 +668,51 @@ class TlRentalBookingLine(models.Model):
 
     @api.model
     def _get_base_capacity(self, product_ids, warehouse_id, company):
-        """Get physical stock capacity per product from stock.quant.
+        """Get fleet capacity per product from product.template.
         
-        Uses stock.quant.quantity (physical stock) to avoid double-counting
-        with our booking reservation layer.
+        Uses tlrm_fleet_capacity field which represents the total units owned
+        for rental, regardless of current physical location.
         
         :param product_ids: list of product.product ids
-        :param warehouse_id: optional stock.warehouse id for location filtering
-        :param company: res.company record for filtering warehouses
-        :return: dict mapping product_id to physical quantity
+        :param warehouse_id: optional stock.warehouse id (not used for fleet capacity)
+        :param company: res.company record
+        :return: dict mapping product_id to fleet capacity
         """
         base_capacity = defaultdict(float)
         if not product_ids:
             return base_capacity
 
-        Quant = self.env['stock.quant']
-
-        if warehouse_id:
-            warehouse = self.env['stock.warehouse'].browse(warehouse_id)
-            if warehouse.exists() and warehouse.lot_stock_id:
-                quants = Quant.search([
-                    ('product_id', 'in', product_ids),
-                    ('location_id', 'child_of', warehouse.lot_stock_id.id),
-                ])
-                for quant in quants:
-                    base_capacity[quant.product_id.id] += quant.quantity
-        else:
-            warehouses = self.env['stock.warehouse'].search([
-                ('company_id', '=', company.id)
-            ])
-            location_ids = warehouses.mapped('lot_stock_id').ids
-            if location_ids:
-                quants = Quant.search([
-                    ('product_id', 'in', product_ids),
-                    ('location_id', 'child_of', location_ids),
-                ])
-                for quant in quants:
-                    base_capacity[quant.product_id.id] += quant.quantity
-
-        # Ensure non-negative values
-        for pid in product_ids:
-            base_capacity[pid] = max(base_capacity[pid], 0.0)
+        products = self.env['product.product'].browse(product_ids)
+        for product in products:
+            base_capacity[product.id] = product.product_tmpl_id.tlrm_fleet_capacity or 0.0
 
         return base_capacity
 
     @api.model
-    def _get_booked_by_product_week(self, product_ids, weeks, warehouse_id, company):
-        """Compute booked quantities per product and week from existing booking lines.
+    def _get_committed_by_product_week(self, product_ids, weeks, warehouse_id, company):
+        """Compute committed quantities per product and week from booking lines.
+        
+        Counts hard commitments: booked, ongoing, finished states.
+        Reserved state is NOT counted (soft hold in optimistic mode).
         
         :param product_ids: list of product.product ids
         :param weeks: list of week dicts from _compute_weeks
         :param warehouse_id: optional stock.warehouse id for filtering
         :param company: res.company record
-        :return: nested defaultdict mapping product_id -> week_key -> booked_qty
+        :return: nested defaultdict mapping product_id -> week_key -> committed_qty
         """
-        booked = defaultdict(lambda: defaultdict(float))
+        committed = defaultdict(lambda: defaultdict(float))
         if not product_ids or not weeks:
-            return booked
+            return committed
 
         overall_start_dt = weeks[0]['start_dt']
         overall_end_dt = weeks[-1]['end_dt']
 
+        # Hard commitments: booked, ongoing, finished
         domain = [
             ('product_id', 'in', product_ids),
             ('company_id', '=', company.id),
-            ('state', '=', 'reserved'),  # Only reserved - ongoing already reduced qty_on_hand
+            ('state', 'in', ['booked', 'ongoing', 'finished']),
             ('date_start', '<', fields.Datetime.to_string(overall_end_dt)),
             ('date_end', '>', fields.Datetime.to_string(overall_start_dt)),
         ]
@@ -606,9 +731,54 @@ class TlRentalBookingLine(models.Model):
             for week in weeks:
                 # Overlap check: [line_start, line_end) vs [week_start, week_end)
                 if line_start < week['end_dt'] and line_end > week['start_dt']:
-                    booked[pid][week['key']] += line.quantity
+                    committed[pid][week['key']] += line.quantity
 
-        return booked
+        return committed
+
+    @api.model
+    def _get_incoming_by_product_week(self, product_ids, weeks, warehouse_id, company):
+        """Compute incoming returns per product and week.
+        
+        Finds items returning TO the specified warehouse with expected_return_date
+        falling within each week. These items become available after return.
+        
+        :param product_ids: list of product.product ids
+        :param weeks: list of week dicts from _compute_weeks
+        :param warehouse_id: stock.warehouse id for return destination filtering
+        :param company: res.company record
+        :return: nested defaultdict mapping product_id -> week_key -> incoming_qty
+        """
+        incoming = defaultdict(lambda: defaultdict(float))
+        if not product_ids or not weeks or not warehouse_id:
+            return incoming
+
+        overall_start_dt = weeks[0]['start_dt']
+        overall_end_dt = weeks[-1]['end_dt']
+
+        # Items returning to this warehouse
+        domain = [
+            ('product_id', 'in', product_ids),
+            ('company_id', '=', company.id),
+            ('state', 'in', ['ongoing', 'finished']),
+            ('return_warehouse_id', '=', warehouse_id),
+            ('expected_return_date', '>=', fields.Datetime.to_string(overall_start_dt)),
+            ('expected_return_date', '<', fields.Datetime.to_string(overall_end_dt)),
+        ]
+
+        lines = self.search(domain)
+        for line in lines:
+            if not line.product_id or not line.expected_return_date:
+                continue
+            pid = line.product_id.id
+            return_dt = fields.Datetime.to_datetime(line.expected_return_date)
+            
+            # Find which week the return falls into
+            for week in weeks:
+                if week['start_dt'] <= return_dt < week['end_dt']:
+                    incoming[pid][week['key']] += line.quantity
+                    break
+
+        return incoming
 
     @api.model
     def _build_grid_columns(self, weeks):
@@ -650,13 +820,14 @@ class TlRentalBookingLine(models.Model):
 
     @api.model
     def _build_grid_rows(self, product_ids, weeks, base_capacity_by_product,
-                         booked_by_product_week, needed_by_product):
+                         committed_by_product_week, incoming_by_product_week, needed_by_product):
         """Build row data for each product in the grid.
         
         :param product_ids: list of product.product ids
         :param weeks: list of week dicts
-        :param base_capacity_by_product: dict from _get_base_capacity
-        :param booked_by_product_week: nested dict from _get_booked_by_product_week
+        :param base_capacity_by_product: dict from _get_base_capacity (fleet capacity)
+        :param committed_by_product_week: nested dict from _get_committed_by_product_week
+        :param incoming_by_product_week: nested dict from _get_incoming_by_product_week
         :param needed_by_product: dict mapping product_id to needed quantity
         :return: list of row dicts for the grid
         """
@@ -664,21 +835,32 @@ class TlRentalBookingLine(models.Model):
         rows = []
 
         for product in products:
-            base_capacity = float(base_capacity_by_product.get(product.id, 0.0) or 0.0)
+            fleet_capacity = float(base_capacity_by_product.get(product.id, 0.0) or 0.0)
             needed = float(needed_by_product.get(product.id, 0.0) or 0.0)
             cell_needed = needed if needed > 0.0 else None
             cells = []
+            
+            # Track cumulative incoming returns for availability projection
+            cumulative_incoming = 0.0
 
             for week in weeks:
                 week_key = week['key']
-                booked = float(booked_by_product_week[product.id].get(week_key, 0.0) or 0.0)
-                available = max(base_capacity - booked, 0.0)
+                committed = float(committed_by_product_week[product.id].get(week_key, 0.0) or 0.0)
+                incoming = float(incoming_by_product_week[product.id].get(week_key, 0.0) or 0.0)
+                
+                # Incoming returns accumulate (once returned, they stay available)
+                cumulative_incoming += incoming
+                
+                # Available = fleet - committed + cumulative incoming returns
+                available = max(fleet_capacity - committed + cumulative_incoming, 0.0)
                 status, booking_ok = self._compute_cell_status(available, cell_needed)
 
                 try:
                     tooltip = _(
-                        "Booked: %(booked)s, Available: %(available)s",
-                        booked=booked,
+                        "Fleet: %(fleet)s, Committed: %(committed)s, Incoming: %(incoming)s, Available: %(available)s",
+                        fleet=fleet_capacity,
+                        committed=committed,
+                        incoming=cumulative_incoming,
                         available=available,
                     )
                 except Exception:
@@ -686,7 +868,8 @@ class TlRentalBookingLine(models.Model):
 
                 cells.append({
                     'column_key': week_key,
-                    'booked': booked,
+                    'committed': committed,
+                    'incoming': incoming,
                     'available': available,
                     'needed': cell_needed,
                     'status': status,
@@ -699,7 +882,7 @@ class TlRentalBookingLine(models.Model):
                 'display_name': product.display_name,
                 'default_code': product.default_code,
                 'uom_name': product.uom_id.name,
-                'base_capacity': base_capacity,
+                'fleet_capacity': fleet_capacity,
                 'needed': cell_needed,
                 'cells': cells,
             })
@@ -746,9 +929,12 @@ class TlRentalBookingLine(models.Model):
             overall_start_dt = fields.Datetime.now()
             overall_end_dt = overall_start_dt
 
-        # Get base capacity and booked quantities
+        # Get fleet capacity and committed/incoming quantities
         base_capacity_by_product = self._get_base_capacity(product_ids, warehouse_id, company)
-        booked_by_product_week = self._get_booked_by_product_week(
+        committed_by_product_week = self._get_committed_by_product_week(
+            product_ids, weeks, warehouse_id, company
+        )
+        incoming_by_product_week = self._get_incoming_by_product_week(
             product_ids, weeks, warehouse_id, company
         )
 
@@ -756,7 +942,7 @@ class TlRentalBookingLine(models.Model):
         columns = self._build_grid_columns(weeks)
         rows = self._build_grid_rows(
             product_ids, weeks, base_capacity_by_product,
-            booked_by_product_week, needed_by_product
+            committed_by_product_week, incoming_by_product_week, needed_by_product
         )
 
         return {

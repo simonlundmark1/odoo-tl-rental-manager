@@ -80,7 +80,7 @@
         <field name="name">tl.rental.booking.list</field>
         <field name="model">tl.rental.booking</field>
         <field name="arch" type="xml">
-            <list decoration-info="state == 'draft'" decoration-warning="state == 'reserved'" decoration-success="state == 'ongoing'" decoration-muted="state in ('finished','returned','cancelled')" limit="80">
+            <list decoration-info="state == 'draft'" decoration-warning="state == 'reserved'" decoration-primary="state == 'booked'" decoration-success="state == 'ongoing'" decoration-muted="state in ('finished','returned','cancelled')" limit="80">
                 <field name="name"/>
                 <field name="project_id"/>
                 <field name="date_start"/>
@@ -90,6 +90,7 @@
                 <field name="state" widget="badge" 
                        decoration-info="state == 'draft'" 
                        decoration-warning="state == 'reserved'" 
+                       decoration-primary="state == 'booked'"
                        decoration-success="state == 'ongoing'" 
                        decoration-muted="state in ('finished','returned','cancelled')"/>
             </list>
@@ -105,11 +106,12 @@
                 <header>
                     <button name="action_check_availability" string="Check Availability" type="object" class="oe_highlight" invisible="state != 'draft'"/>
                     <button name="action_confirm" string="Confirm" type="object" class="oe_highlight" invisible="state != 'draft'"/>
-                    <button name="action_mark_ongoing" string="Mark Ongoing" type="object" class="oe_highlight" invisible="state != 'reserved'"/>
-                    <button name="action_finish" string="Finish" type="object" invisible="state not in ('reserved', 'ongoing')"/>
+                    <button name="action_book" string="Lock Booking" type="object" class="oe_highlight" invisible="state != 'reserved'"/>
+                    <button name="action_mark_ongoing" string="Mark Ongoing" type="object" class="oe_highlight" invisible="state != 'booked'"/>
+                    <button name="action_finish" string="Finish" type="object" invisible="state != 'ongoing'"/>
                     <button name="action_return" string="Return" type="object" class="oe_highlight" invisible="state != 'finished'"/>
-                    <button name="action_cancel" string="Cancel" type="object" invisible="state in ('returned', 'cancelled')"/>
-                    <field name="state" widget="statusbar" statusbar_visible="draft,reserved,ongoing,finished,returned"/>
+                    <button name="action_cancel" string="Cancel" type="object" invisible="state in ('booked', 'ongoing', 'finished', 'returned', 'cancelled')"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,reserved,booked,ongoing,finished,returned"/>
                 </header>
                 <sheet>
                     <div class="oe_title">
@@ -135,6 +137,8 @@
                                     <field name="product_id"/>
                                     <field name="source_warehouse_id"/>
                                     <field name="quantity"/>
+                                    <field name="return_warehouse_id" optional="show"/>
+                                    <field name="expected_return_date" optional="show"/>
                                     <field name="date_start" column_invisible="1"/>
                                     <field name="date_end" column_invisible="1"/>
                                     <field name="state" column_invisible="1"/>
@@ -182,7 +186,7 @@
         <field name="name">tl.rental.booking.line.list</field>
         <field name="model">tl.rental.booking.line</field>
         <field name="arch" type="xml">
-            <list decoration-warning="state == 'reserved'" decoration-success="state == 'ongoing'" decoration-muted="state in ('finished','returned','cancelled')" create="0" edit="0">
+            <list decoration-warning="state == 'reserved'" decoration-primary="state == 'booked'" decoration-success="state == 'ongoing'" decoration-muted="state in ('finished','returned','cancelled')" create="0" edit="0">
                 <field name="booking_id" string="Booking Ref"/>
                 <field name="project_id"/>
                 <field name="product_id"/>
@@ -190,8 +194,11 @@
                 <field name="date_start" string="Start"/>
                 <field name="date_end" string="End"/>
                 <field name="source_warehouse_id" string="From" optional="hide"/>
+                <field name="return_warehouse_id" string="Return To" optional="hide"/>
+                <field name="expected_return_date" string="Return Date" optional="hide"/>
                 <field name="state" widget="badge"
                        decoration-warning="state == 'reserved'"
+                       decoration-primary="state == 'booked'"
                        decoration-success="state == 'ongoing'"
                        decoration-muted="state in ('finished','returned','cancelled')"/>
             </list>
@@ -213,6 +220,7 @@
                         </group>
                         <group>
                             <field name="source_warehouse_id"/>
+                            <field name="return_warehouse_id"/>
                             <field name="state"/>
                         </group>
                     </group>
@@ -220,6 +228,7 @@
                         <group>
                             <field name="date_start"/>
                             <field name="date_end"/>
+                            <field name="expected_return_date"/>
                         </group>
                         <group>
                             <field name="company_id" groups="base.group_multi_company"/>
@@ -239,6 +248,7 @@
                 <field name="booking_id"/>
                 <field name="product_id"/>
                 <filter name="reserved" string="Reserved" domain="[('state', '=', 'reserved')]"/>
+                <filter name="booked" string="Booked" domain="[('state', '=', 'booked')]"/>
                 <filter name="ongoing" string="Ongoing" domain="[('state', '=', 'ongoing')]"/>
             </search>
         </field>

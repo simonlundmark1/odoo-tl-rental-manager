@@ -91,19 +91,38 @@ Stock users automatically inherit TL Rental User permissions.
 
 - `tlrm_rental_location_id`: Points to "TL Rental Out" location (auto-created)
 
+### product.template (extension)
+
+- `tlrm_fleet_capacity`: Total units owned for rental (used for availability calculations)
+- `tlrm_available_units`: Computed available units (fleet - booked - rented)
+- `tlrm_booked_units`: Units locked for pickup
+- `tlrm_reserved_units`: Units in soft-hold reservations
+- `tlrm_rented_units`: Units currently out on rental
+
 ### tl.rental.booking
 
 Main booking header with:
 - Project reference (required)
 - Source warehouse (determines rental location)
 - Date range (start/end)
-- State workflow: draft → reserved → ongoing → finished → returned
+- State workflow: draft → reserved → **booked** → ongoing → finished → returned
+
+**State Descriptions:**
+- `draft`: Planning stage, no impact on availability
+- `reserved`: Soft hold - does NOT block availability (optimistic booking)
+- `booked`: Hard lock - blocks availability, pickings created
+- `ongoing`: Items physically out on rental
+- `finished`: Past return date, awaiting physical return
+- `returned`: Complete, items back in stock
 
 ### tl.rental.booking.line
 
 Booking lines with:
 - Product and quantity
-- Related fields from booking (warehouse, dates, state)
+- Source warehouse (where items are rented from)
+- **Return warehouse** (where items return to - can differ from source)
+- **Expected return date** (per-line, defaults to booking end date)
+- Related fields from booking (dates, state)
 
 ## Availability Grid
 
@@ -148,9 +167,18 @@ The wizard helps ensure all products are available before confirming a booking.
 3. Add booking lines with products and quantities
 4. Click **Check Availability** to find available dates for all products
 5. Select a date range and click **Apply Dates**
-6. Confirm to reserve stock (creates outbound picking to "TL Rental Out")
-7. Use **Availability** view to check capacity across all products
-8. When rental ends, click **Return** to create return picking
+6. **Confirm** to create a soft reservation (no stock impact yet)
+7. **Lock Booking** when ready to commit - creates outbound and return pickings
+8. **Mark Ongoing** when items leave the warehouse
+9. **Finish** when rental period ends
+10. **Return** when items are physically back in stock
+
+### Cross-Warehouse Returns
+
+Items can return to a different warehouse than they were rented from:
+1. On booking lines, set **Return Warehouse** to the destination
+2. Optionally set **Expected Return Date** per line for partial returns
+3. Return pickings are automatically grouped by destination and date
 
 ## Technical Details
 

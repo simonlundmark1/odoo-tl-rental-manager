@@ -1,68 +1,114 @@
 # Rental Availability Logic
 
-## Visual Overview
+## Overview
+
+The TL Rental Manager uses a **fleet capacity-based availability system** with **optimistic booking**.
+This allows unlimited reservations while ensuring hard commitments don't exceed actual inventory.
+
+## Key Concepts
+
+### Fleet Capacity
+- **Definition:** Total units owned for rental, regardless of current physical location
+- **Field:** `product.template.tlrm_fleet_capacity`
+- **Purpose:** Provides a stable base for availability calculations even when items are out on rental
+
+### Optimistic Booking
+- **Reserved state:** Soft hold - does NOT block availability
+- **Booked state:** Hard lock - DOES block availability
+- **Benefit:** Sales can overbook at reservation level; operations confirms real availability before locking
+
+## State Machine
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              ODOO CORE                                       │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                         stock.quant                                  │    │
-│  │  ┌──────────────────┐    ┌──────────────────┐                       │    │
-│  │  │   qty_on_hand    │    │ reserved_quantity│  ← Set by Odoo when   │    │
-│  │  │   (physical)     │    │ (Odoo internal)  │    picking.action_    │    │
-│  │  │                  │    │                  │    assign() is called │    │
-│  │  │  WE USE THIS ✓   │    │  WE IGNORE THIS  │                       │    │
-│  │  └──────────────────┘    └──────────────────┘                       │    │
-│  │                                                                      │    │
-│  │  qty_available = qty_on_hand - reserved_quantity  ← WE DON'T USE    │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│                         BOOKING STATE MACHINE                                │
+├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                      stock.picking / stock.move                      │    │
-│  │                                                                      │    │
-│  │  Created when booking is confirmed. Moves stock between locations.  │    │
-│  │  We use this for PHYSICAL movement only, not for availability.      │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│  DRAFT ──► RESERVED ──► BOOKED ──► ONGOING ──► FINISHED ──► RETURNED        │
+│    │          │           │          │           │            │              │
+│    ▼          ▼           ▼          ▼           ▼            ▼              │
+│                                                                              │
+│  Planning   Soft hold   Hard lock   Out on     Past end    Complete         │
+│  No impact  (can be     (picking    rental     date, not   Stock            │
+│             overbooked) created)    (physical) yet back    returned         │
+│                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
 
-                                    │
-                                    │ We read qty_on_hand
-                                    ▼
+| State | Blocks Availability? | Picking Status | Can Cancel? |
+|-------|---------------------|----------------|-------------|
+| draft | No | None | Yes |
+| reserved | **No** (optimistic) | None | Yes |
+| booked | **Yes** | Outbound + Return created | Yes (releases stock) |
+| ongoing | **Yes** | Outbound done | No |
+| finished | **Yes** | Return ready | No |
+| returned | No | Return done | N/A |
 
+## Availability Formula
+
+```
+available_for_period(product, warehouse, start, end) = 
+    fleet_capacity
+    - SUM(booked lines overlapping period)
+    - SUM(ongoing lines overlapping period)
+    - SUM(finished lines overlapping period)
+    + SUM(incoming returns before period starts)
+```
+
+### Visual Breakdown
+
+```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         TL RENTAL MANAGER (Custom)                           │
+│                    AVAILABILITY CALCULATION                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    AVAILABILITY CALCULATION                          │    │
-│  │                                                                      │    │
-│  │   ┌─────────────┐     ┌─────────────────────────────────────────┐   │    │
-│  │   │ qty_on_hand │  -  │  SUM of booking lines where:            │   │    │
-│  │   │ (from Odoo) │     │    • state = 'reserved'                 │   │    │
-│  │   │             │     │    • date range overlaps                │   │    │
-│  │   │             │     │    • same warehouse                     │   │    │
-│  │   └─────────────┘     └─────────────────────────────────────────┘   │    │
-│  │         │                              │                             │    │
-│  │         └──────────────┬───────────────┘                             │    │
-│  │                        ▼                                             │    │
-│  │              ┌─────────────────┐                                     │    │
-│  │              │    AVAILABLE    │                                     │    │
-│  │              │   for period    │                                     │    │
-│  │              └─────────────────┘                                     │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│   Fleet Capacity (e.g., 10 projectors)                                       │
+│   ════════════════════════════════════════════════════                      │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    BOOKING LINE STATES                               │    │
-│  │                                                                      │    │
-│  │   draft ──────► reserved ──────► ongoing ──────► finished ──► returned│   │
-│  │     │              │                │                                │    │
-│  │     │              │                │                                │    │
-│  │     ▼              ▼                ▼                                │    │
-│  │  No effect    Blocks future    Stock already                         │    │
-│  │  on avail.    availability     moved out                             │    │
-│  │               (we count it)    (qty_on_hand                          │    │
-│  │                                already reduced)                      │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
+│   [----- booked -----][----- ongoing -----][----- finished -----]           │
+│                                                                              │
+│   [+ incoming returns to this warehouse before period]                       │
+│                                                                              │
+│   ═══════════════════════════════════════════════════                       │
+│   [                    AVAILABLE                      ]                      │
+│                                                                              │
+│   Note: 'reserved' is shown for info but does NOT reduce available          │
+│                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Cross-Warehouse Returns
+
+Items can return to a different warehouse than they were rented from.
+
+### Line-Level Fields
+- `source_warehouse_id`: Where items are rented FROM
+- `return_warehouse_id`: Where items return TO (default = source)
+- `expected_return_date`: When items are expected back (default = booking.date_end)
+
+### Example: Cross-Warehouse Return
+
+```
+Booking: "Event Stockholm Jan 15-20"
+├── Line 1: 5 Projectors from Stockholm → return to Stockholm
+├── Line 2: 3 Projectors from Stockholm → return to Gothenburg (CUSTOM)
+└── Line 3: 2 Speakers from Stockholm → return to Stockholm
+
+Creates pickings:
+- 1 Outbound: Stockholm → TL Rented Out (all items)
+- 2 Returns:
+    - TL Rented Out → Stockholm (5 proj + 2 speakers)
+    - TL Rented Out → Gothenburg (3 proj)
+```
+
+### Availability Impact
+
+When calculating availability for **Gothenburg** for **Jan 25**:
+
+```
+Gothenburg fleet: 5 projectors
++ Incoming from Stockholm booking: 3 (arriving ~Jan 20)
+= Available for Jan 25: 8 projectors
 ```
 
 ## State Transitions & Stock Impact
@@ -79,39 +125,45 @@
 │         │ action_confirm()                                                 │
 │         ▼                                                                  │
 │                                                                            │
-│  STATE: reserved                                                           │
-│  ────────────────                                                          │
-│  • Picking created (Warehouse Stock → TL Rental Out)                       │
-│  • Picking assigned (Odoo reserves stock internally)                       │
-│  • qty_on_hand: UNCHANGED (stock still in warehouse)                       │
-│  • WE COUNT THIS in availability calculation                               │
+│  STATE: reserved (SOFT HOLD)                                               │
+│  ───────────────────────────                                               │
+│  • No picking created yet                                                  │
+│  • No stock impact                                                         │
+│  • NOT counted in availability (optimistic mode)                           │
+│  • Can be overbooked - sales flexibility                                   │
 │                                                                            │
-│         │ picking validated (action_done)                                  │
+│         │ action_book() - HARD AVAILABILITY CHECK HERE                     │
+│         ▼                                                                  │
+│                                                                            │
+│  STATE: booked (HARD LOCK)                                                 │
+│  ─────────────────────────                                                 │
+│  • Outbound picking created (Warehouse → TL Rental Out)                    │
+│  • Return picking(s) created (grouped by destination + date)               │
+│  • COUNTED in availability - blocks other bookings                         │
+│                                                                            │
+│         │ action_mark_ongoing() - outbound picking validated               │
 │         ▼                                                                  │
 │                                                                            │
 │  STATE: ongoing                                                            │
 │  ───────────────                                                           │
 │  • Stock physically moved to "TL Rental Out" location                      │
-│  • qty_on_hand: REDUCED (stock left the warehouse)                         │
-│  • NOT counted separately (already reflected in qty_on_hand)               │
+│  • COUNTED in availability                                                 │
 │                                                                            │
-│         │ date_end passed                                                  │
+│         │ action_finish()                                                  │
 │         ▼                                                                  │
 │                                                                            │
 │  STATE: finished                                                           │
 │  ───────────────                                                           │
-│  • Waiting for return                                                      │
-│  • Stock still in "TL Rental Out"                                          │
-│  • qty_on_hand: Still reduced                                              │
+│  • Past return date, waiting for physical return                           │
+│  • COUNTED in availability                                                 │
 │                                                                            │
-│         │ action_return() + picking validated                              │
+│         │ action_return() - return picking validated                       │
 │         ▼                                                                  │
 │                                                                            │
 │  STATE: returned                                                           │
 │  ────────────────                                                          │
-│  • Stock moved back (TL Rental Out → Warehouse Stock)                      │
-│  • qty_on_hand: RESTORED                                                   │
-│  • Available for new bookings                                              │
+│  • Stock moved back to return warehouse                                    │
+│  • NOT counted - items available again                                     │
 │                                                                            │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -119,9 +171,8 @@
 ## Example Scenario
 
 ```
-Product: Balk
-Warehouse: Stockholm
-Physical stock (qty_on_hand): 20 units
+Product: Projector
+Fleet Capacity: 10 units
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ Timeline                                                                    │
@@ -130,27 +181,33 @@ Physical stock (qty_on_hand): 20 units
 │       │            │            │            │            │                 │
 │       ├────────────┼────────────┼────────────┼────────────┤                 │
 │       │            │            │            │            │                 │
-│       │  Booking A: 5 units (reserved)       │            │                 │
-│       │  ════════════════════════            │            │                 │
+│       │  Booking A: 5 units (BOOKED - hard lock)         │                 │
+│       │  ════════════════════════                        │                 │
 │       │            │            │            │            │                 │
-│       │            │  Booking B: 3 units (reserved)      │                 │
-│       │            │  ═══════════════════════════════════│                 │
+│       │            │  Booking B: 3 units (RESERVED - soft hold)            │
+│       │            │  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                 │
 │       │            │            │            │            │                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-Availability calculation for different periods:
+Availability calculation (optimistic mode):
 
-• Jan 1-14:   20 - 5 = 15 available
-• Jan 15-31:  20 - 5 - 3 = 12 available (both overlap)
-• Feb 1-14:   20 - 3 = 17 available (only B overlaps)
-• Feb 15+:    20 - 0 = 20 available (no overlaps)
+• Jan 1-14:   10 - 5 (booked) = 5 available
+• Jan 15-31:  10 - 5 (booked) = 5 available  (reserved B doesn't block!)
+• Feb 1-14:   10 - 0 = 10 available
+• Feb 15+:    10 - 0 = 10 available
+
+When Booking B tries to LOCK (reserved → booked):
+• System checks: 10 - 5 = 5 available, requesting 3 → OK, can lock
 ```
 
 ## Key Design Decisions
 
 | Aspect | Our Approach | Why |
 |--------|--------------|-----|
-| Base stock | `qty_on_hand` | Physical count, ignores Odoo's internal reservations |
-| Reservation tracking | Booking line state = 'reserved' | Simple, date-aware, no double-counting |
-| Ongoing rentals | Not counted separately | `qty_on_hand` already reduced when stock moved |
-| Odoo stock.move | Used for physical transfer only | Not for availability planning |
+| Base capacity | `tlrm_fleet_capacity` | Stable base regardless of physical location |
+| Soft hold | `reserved` state | Sales flexibility, allows overbooking |
+| Hard lock | `booked` state | Operations confirms real availability |
+| What blocks | `booked`, `ongoing`, `finished` | Only committed items block |
+| Cross-warehouse | Per-line `return_warehouse_id` | Supports complex logistics |
+| Incoming returns | Counted in availability | Future availability projection |
+| Odoo stock.move | Physical transfer only | Not for availability planning |

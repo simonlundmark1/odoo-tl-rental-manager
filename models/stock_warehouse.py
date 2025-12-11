@@ -56,11 +56,22 @@ class StockWarehouse(models.Model):
         """Fix existing TL Rental Out locations to use 'internal' usage.
         
         Called during module upgrade to fix locations that were created
-        with 'customer' usage.
+        with 'customer' usage. Skips locations that have stock (Odoo prevents
+        changing usage on locations with stock).
         """
         locations = self.env['stock.location'].search([
             ('name', '=', 'TL Rental Out'),
             ('usage', '=', 'customer'),
         ])
-        if locations:
-            locations.write({'usage': 'internal'})
+        Quant = self.env['stock.quant']
+        for location in locations:
+            # Check if location has any stock
+            has_stock = Quant.search_count([
+                ('location_id', '=', location.id),
+                ('quantity', '!=', 0),
+            ])
+            if not has_stock:
+                try:
+                    location.write({'usage': 'internal'})
+                except Exception:
+                    pass  # Skip if still fails for any reason
