@@ -54,10 +54,16 @@ export class TlrmAvailabilityAction extends Component {
             const products = await this.orm.searchRead(
                 "product.product",
                 productDomain,
-                ["id"],
+                ["id", "image_128"],
                 { limit: 100 }
             );
             const productIds = products.map((p) => p.id);
+            
+            // Store image data for later use
+            this.productImages = {};
+            for (const p of products) {
+                this.productImages[p.id] = p.image_128;
+            }
 
             if (productIds.length === 0) {
                 this.state.grid = { columns: [], rows: [] };
@@ -228,6 +234,10 @@ export class TlrmAvailabilityAction extends Component {
 
     get sortIcon() {
         return this.state.sortOrder === "asc" ? "↑" : "↓";
+    }
+
+    getProductImage(productId) {
+        return this.productImages && this.productImages[productId] ? this.productImages[productId] : null;
     }
 
     /**

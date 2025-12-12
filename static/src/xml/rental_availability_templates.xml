@@ -83,9 +83,23 @@
                             <t t-foreach="rows" t-as="row" t-key="row.product_id">
                                 <tr>
                                     <td class="align-middle bg-white border-bottom" style="position: sticky; left: 0; z-index: 1;">
-                                        <a href="#" class="text-primary text-decoration-none" t-on-click.prevent="() => this.openProduct(row.product_id)">
-                                            <t t-esc="row.display_name"/>
-                                        </a>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <t t-set="productImg" t-value="this.getProductImage(row.product_id)"/>
+                                            <t t-if="productImg">
+                                                <img t-att-src="'data:image/png;base64,' + productImg" 
+                                                     style="width: 32px; height: 32px; object-fit: cover; border-radius: 4px;"
+                                                     class="border"/>
+                                            </t>
+                                            <t t-else="">
+                                                <div style="width: 32px; height: 32px; border-radius: 4px;" 
+                                                     class="bg-light border d-flex align-items-center justify-content-center">
+                                                    <i class="fa fa-cube text-muted small"/>
+                                                </div>
+                                            </t>
+                                            <a href="#" class="text-primary text-decoration-none" t-on-click.prevent="() => this.openProduct(row.product_id)">
+                                                <t t-esc="row.display_name"/>
+                                            </a>
+                                        </div>
                                     </td>
                                     <t t-foreach="row.cells" t-as="cell" t-key="cell.column_key">
                                         <t t-set="colData" t-value="columns.find(c => c.key === cell.column_key)"/>
